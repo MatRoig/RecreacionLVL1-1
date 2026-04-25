@@ -1,4 +1,6 @@
-# 	super-mario
+# 	MARIO BROS. LVL 1-1 RECREATION JAVA LIBGDX
+
+proyecto personal de estudio recreacion lo mas fidedigna al original del nivel uno mundo uno del juego de NES "Mario Bros."
 
 A [libGDX](https://libgdx.com/) project generated with [gdx-liftoff](https://github.com/libgdx/gdx-liftoff).
 
