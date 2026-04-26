@@ -4,6 +4,7 @@ import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.Input;
 import com.badlogic.gdx.graphics.Texture;
 import com.badlogic.gdx.graphics.g2d.SpriteBatch;
+import com.badlogic.gdx.graphics.g2d.TextureRegion;
 
 /**
  * Clase que representa al personaje Mario.
@@ -52,50 +53,65 @@ public class Mario {
      */
     private boolean onGround = false;
 
+    // ========== ATRIBUTOS DE ANIMACIÓN ==========
     /**
      * La imagen de Mario cargada en memoria.
      * CONCEPTO: Texture
      * Es una imagen (PNG, JPG) cargada en la memoria de video (GPU).
      * Dibujar desde la GPU es MUCHO más rápido que desde el disco duro.
      */
-    private Texture texture;
+    // El sprite sheet completo (imagen de 64x16 con 4 frames)
+    private Texture spriteSheet;
 
-    // Tamaño del sprite de Mario (16x16 píxeles, tamaño original NES)
+    // Array que guarda cada frame como un recorte (TextureRegion)
+    private TextureRegion[] frames;
+
+    // Índice del frame actual que se está mostrando (0, 1, 2 o 3)
+    private int currentFrame = 0;
+
+    // Temporizador para saber cuándo cambiar de frame
+    private float animationTimer = 0;
+
+    // Duración de cada frame en segundos (0.15 = 150 milisegundos)
+    // A 60 FPS, cada frame dura ~9 frames de juego
+    private static final float FRAME_DURATION = 0.15f;
+
+    // ========== CONSTANTES ==========
     private static final int WIDTH = 16;
     private static final int HEIGHT = 16;
-
-    /**
-     * Gravedad: aceleración constante hacia abajo.
-     * Valor negativo porque en pantalla Y aumenta hacia abajo.
-     * -500 significa que cada segundo, la velocidad vertical disminuye 500 unidades.
-     */
     private static final float GRAVITY = -500f;
-
-    /**
-     * Fuerza del salto: impulso inicial hacia arriba.
-     * Valor positivo porque subir es contra la gravedad.
-     */
     private static final float JUMP_FORCE = 250f;
+
+    // ========== ESTADOS DE ANIMACIÓN ==========
+    // Enum interno para saber qué animación está activa
+    private enum AnimationState {
+        IDLE,       // Quieto (usaremos frame 0)
+        WALKING,    // Caminando → frames 1, 2, 3 ciclando
+        SKIDDING,   // Frenando (frame 2)
+        JUMPING,    // Saltando (frame 3)
+        DEAD        // Muriendo (frame 3 o especial)
+    }
+    private AnimationState currentState = AnimationState.IDLE;
+
+    // Dirección: 1 = derecha, -1 = izquierda
+    private int facingDirection = 1;
 
     // ========== CONSTRUCTOR ==========
 
-    /**
-     * El constructor se ejecuta cuando creamos un objeto con "new".
-     * Ejemplo: new Mario(50, 80) llama a este método.
-     *
-     * @param startX Posición inicial horizontal
-     * @param startY Posición inicial vertical
-     */
     public Mario(float startX, float startY) {
-        // "this.x" se refiere al atributo de la clase
-        // "startX" es el parámetro recibido
-        // Los distinguimos porque tienen nombres diferentes
         this.x = startX;
         this.y = startY;
 
-        // Cargar la imagen desde la carpeta assets/
-        // Gdx.files.internal busca automáticamente en assets/
-        texture = new Texture("mario.png");
+        // Cargar el sprite sheet
+        spriteSheet = new Texture("mario_anim.png");
+
+        // Crear los 4 frames recortando la imagen
+        // new TextureRegion(textura, x, y, ancho, alto)
+        // x se mueve de 0 en 0: 0, 16, 32, 48
+        frames = new TextureRegion[7];
+        for (int i = 0; i < 7; i++) {
+            frames[i] = new TextureRegion(spriteSheet, i * 16, 0, 16, 16);
+        }
     }
 
     // ========== MÉTODOS (acciones que Mario puede hacer) ==========
@@ -124,9 +140,11 @@ public class Mario {
 
         if (left) {
             velocityX = -speed;  // Negativo = izquierda
+            facingDirection = -1;  // Mira a la izquierda
         }
         if (right) {
             velocityX = speed;   // Positivo = derecha
+            facingDirection = 1;   // Mira a la derecha
         }
 
         // Aplicar movimiento horizontal
@@ -161,33 +179,125 @@ public class Mario {
         if (Gdx.input.isKeyJustPressed(Input.Keys.SPACE) && onGround) {
             velocityY = JUMP_FORCE;  // Impulso hacia arriba
             onGround = false;        // Ya no está en el suelo
+            currentState = AnimationState.JUMPING;
         }
 
-        // Aplicar movimiento vertical
+        // ===== APLICAR MOVIMIENTO VERTICAL =====
         y += velocityY * deltaTime;
 
-        // ===== COLISIÓN CON EL SUELO (versión simple) =====
-        // Por ahora usamos un suelo fijo en y=80
-        // Más adelante lo reemplazaremos con colisiones reales del tilemap
+        // ===== COLISIÓN CON EL SUELO (actualizado) =====
+        // Primero usamos un suelo fijo en y=80
+        // actualizamos con lo siguiente
 
         float groundY = 272;  // Suelo más arriba, sobre los ladrillos
 
         if (y <= groundY) {
             y = groundY;       // Colocar exactamente en el suelo
             velocityY = 0;      // Detener caída
-            onGround = true;    // Ahora puede volver a saltar
+
+            // Si acaba de aterrizar, cambiar estado
+            if (!onGround) {
+                onGround = true;
+                currentState = AnimationState.IDLE;
+            }
+        }
+
+        // ===== ACTUALIZAR ESTADO DE ANIMACIÓN =====
+        updateAnimationState(velocityX);
+
+        // ===== ACTUALIZAR FRAME DE ANIMACIÓN =====
+        updateAnimation(deltaTime);
+
+    }
+    /**
+     * Decide qué animación mostrar según el movimiento.
+     */
+    private void updateAnimationState(float velocityX) {
+        if (!onGround) {
+            // Está en el aire → saltando
+            currentState = AnimationState.JUMPING;
+        } else if (velocityX != 0) {
+            // Detectar si está cambiando de dirección (frenando)
+            // Si se mueve a la derecha pero mira a la izquierda, o viceversa
+            if ((velocityX > 0 && facingDirection == -1) ||
+                (velocityX < 0 && facingDirection == 1)) {
+                currentState = AnimationState.SKIDDING;
+            } else {
+                // Se está moviendo → caminando
+                currentState = AnimationState.WALKING;
+            }
+        } else {
+            // No se mueve → quieto
+            currentState = AnimationState.IDLE;
         }
     }
 
+    /**
+     * Cambia el frame actual según el estado y el tiempo transcurrido.
+     */
+    private void updateAnimation(float deltaTime) {
+        animationTimer += deltaTime;
+
+        // Solo cambiar de frame si pasó el tiempo suficiente
+        if (animationTimer >= FRAME_DURATION) {
+            animationTimer = 0;  // Reiniciar temporizador
+
+            switch (currentState) {
+                case IDLE:
+                    currentFrame = 0;  // Siempre frame 0 (quieto)
+                    break;
+
+                case WALKING:
+                    // Ciclar entre frames 1, 2, 3
+                    // Si está en 1 → 2, si está en 2 → 3, si está en 3 → 1
+                    if (currentFrame < 1 || currentFrame > 3) {
+                        currentFrame = 1;  // Empezar desde WALK1
+                    } else {
+                        currentFrame++;
+                        if (currentFrame > 3) {
+                            currentFrame = 1;  // Volver a WALK1
+                        }
+                    }
+                    break;
+
+                case SKIDDING:
+                    currentFrame = 4;  // Frame de frenado
+                    break;
+
+                case JUMPING:
+                    currentFrame = 5;  // Frame de salto
+                    break;
+
+                case DEAD:
+                    currentFrame = 6;  // Por ahora mismo que salto
+                    break;
+            }
+        }
+    }
+
+    // ========== DRAW ==========
     /**
      * draw() dibuja a Mario en pantalla.
      *
      * @param batch El "pintor" de LibGDX que dibuja imágenes 2D
      */
+
     public void draw(SpriteBatch batch) {
-        // Dibujar la textura en la posición (x, y)
-        // Parámetros: imagen, posiciónX, posiciónY, ancho, alto
-        batch.draw(texture, x, y, WIDTH, HEIGHT);
+        // CONCEPTO: Dibujar volteado horizontalmente
+        // Si facingDirection es -1 (izquierda), volteamos el sprite
+        // Parámetros: region, x, y, origenX, origenY, ancho, alto, escalaX, escalaY, rotación
+
+        TextureRegion frame = frames[currentFrame];
+
+        if (facingDirection == 1) {
+            // Mira a la derecha: dibujar normal
+            batch.draw(frame, x, y, WIDTH, HEIGHT);
+        } else {
+            // Mira a la izquierda: voltear horizontalmente
+            // El truco: dibujamos con ancho negativo (-WIDTH)
+            // y movemos x para compensar
+            batch.draw(frame, x + WIDTH, y, -WIDTH, HEIGHT);
+        }
     }
 
     // ========== GETTERS (métodos para leer atributos privados) ==========
@@ -204,11 +314,12 @@ public class Mario {
         return y;
     }
 
+    // ========== DISPOSE ==========
     /**
      * Libera la memoria de la textura cuando ya no la necesitamos.
      * Es buena práctica para no dejar "basura" en la GPU.
      */
     public void dispose() {
-        texture.dispose();
+        spriteSheet.dispose();
     }
 }
